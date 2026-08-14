@@ -138,14 +138,20 @@ def home():
 
 @app.route('/webhook', methods=['GET'])
 def verify():
-    """Xác thực Webhook với Facebook Developer"""
+    """Xác thực Webhook chuẩn quy định Facebook Messenger"""
     mode = request.args.get("hub.mode")
     token = request.args.get("hub.verify_token")
     challenge = request.args.get("hub.challenge")
 
-    if mode == "subscribe" and token == VERIFY_TOKEN:
+    # Lấy VERIFY_TOKEN từ môi trường và xóa khoảng trắng thừa nếu có
+    expected_token = str(VERIFY_TOKEN).strip() if VERIFY_TOKEN else ""
+    received_token = str(token).strip() if token else ""
+
+    if mode == "subscribe" and received_token == expected_token:
         print(">>> Facebook Verify Webhook thành công!")
-        return challenge, 200
+        return str(challenge), 200
+    
+    print(f">>> Lỗi Verify: Nhận '{received_token}', Mong đợi '{expected_token}'")
     return "Wrong token", 403
 
 @app.route('/webhook', methods=['POST'])
