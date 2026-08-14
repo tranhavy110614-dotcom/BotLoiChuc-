@@ -17,51 +17,82 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 FIREBASE_DB_URL = os.environ.get("FIREBASE_DB_URL")
 
 # ==========================================
-# 2. KHỞI TẠO GEMINI AI & FIREBASE
+# 2. KHỞI TẠO GEMINI AI & FIREBASE (AN TOÀN CHỐNG CRASH)
 # ==========================================
 # Khởi tạo Gemini AI
-genai.configure(api_key=GEMINI_API_KEY)
-model = genai.GenerativeModel('gemini-1.5-flash')
+if GEMINI_API_KEY:
+    try:
+        genai.configure(api_key=GEMINI_API_KEY)
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        print(">>> Khởi tạo Gemini AI thành công!")
+    except Exception as e:
+        print(f">>> Lỗi khởi tạo Gemini AI: {e}")
+        model = None
+else:
+    model = None
+    print(">>> Cảnh báo: Chưa cấu hình GEMINI_API_KEY!")
 
 # Khởi tạo Firebase từ file firebase_key.json
-cred = credentials.Certificate("firebase_key.json")
-firebase_admin.initialize_app(cred, {
-    'databaseURL': FIREBASE_DB_URL
-})
+try:
+    if not firebase_admin._apps:
+        cred = credentials.Certificate("firebase_key.json")
+        firebase_admin.initialize_app(cred, {
+            'databaseURL': FIREBASE_DB_URL
+        })
+    print(">>> Khởi tạo Firebase thành công!")
+except Exception as e:
+    print(f">>> Lỗi khởi tạo Firebase: {e}")
 
 # ==========================================
 # 3. HÀM TƯƠNG TÁC VỚI CƠ SỞ DỮ LIỆU FIREBASE
 # ==========================================
 def save_role(role, sender_id):
     """Lưu ID người dùng vào Firebase theo vai trò"""
-    ref = db.reference('users')
-    if role == 'banbe':
-        friends = ref.child('banbe').get() or []
-        if sender_id not in friends:
-            friends.append(sender_id)
-            ref.child('banbe').set(friends)
-    else:
-        ref.child(role).set(sender_id)
+    try:
+        ref = db.reference('users')
+        if role == 'banbe':
+            friends = ref.child('banbe').get() or []
+            if sender_id not in friends:
+                friends.append(sender_id)
+                ref.child('banbe').set(friends)
+        else:
+            ref.child(role).set(sender_id)
+    except Exception as e:
+        print(f"Lỗi lưu dữ liệu vào Firebase: {e}")
 
 def get_users():
     """Lấy danh sách ID đã đăng ký từ Firebase"""
-    ref = db.reference('users')
-    return ref.get() or {}
+    try:
+        ref = db.reference('users')
+        return ref.get() or {}
+    except Exception as e:
+        print(f"Lỗi đọc dữ liệu từ Firebase: {e}")
+        return {}
 
 # ==========================================
 # 4. HÀM GỬI TIN NHẮN MESSENGER & TẠO LỜI CHÚC
 # ==========================================
 def send_msg(user_id, text):
     """Gửi tin nhắn phản hồi qua Messenger Graph API"""
+    if not PAGE_ACCESS_TOKEN:
+        print("Lỗi: PAGE_ACCESS_TOKEN chưa được cung cấp!")
+        return
     url = f"https://graph.facebook.com/v18.0/me/messages?access_token={PAGE_ACCESS_TOKEN}"
     payload = {
         "recipient": {"id": user_id},
         "message": {"text": text}
     }
-    requests.post(url, json=payload)
+    try:
+        res = requests.post(url, json=payload)
+        print(f"Gửi tin nhắn tới {user_id}: {res.status_code}")
+    except Exception as e:
+        print(f"Lỗi gửi tin nhắn Facebook: {e}")
 
 def tao_loi_chuc(doi_tuong, thoi_gian):
     """Gọi Gemini AI tạo lời chúc tự nhiên"""
+    if not model:
+        return f"Chúc {doi_tuong} một buổi {thoi_gian} luôn ngập tràn niềm vui và bình an nhé! ❤️"
+        
     prompt = f"Viết 1 lời chúc buổi {thoi_gian} ngắn gọn, tự nhiên, tràn đầy tình cảm gửi cho {doi_tuong} (kèm 1-2 icon phù hợp). Tuyệt đối không để lời chúc trong dấu ngoặc kép."
     try:
         response = model.generate_content(prompt)
@@ -101,20 +132,32 @@ scheduler.start()
 # ==========================================
 # 6. MÃ NGUỒN WEBHOOK KẾT NỐI MESSENGER
 # ==========================================
+@app.route('/', methods=['GET'])
+def home():
+    return "Bot đang hoạt động 24/7!", 200
+
 @app.route('/webhook', methods=['GET'])
 def verify():
     """Xác thực Webhook với Facebook Developer"""
-    if request.args.get("hub.verify_token") == VERIFY_TOKEN:
-        return request.args.get("hub.challenge")
+    mode = request.args.get("hub.mode")
+    token = request.args.get("hub.verify_token")
+    challenge = request.args.get("hub.challenge")
+
+    if mode == "subscribe" and token == VERIFY_TOKEN:
+        print(">>> Facebook Verify Webhook thành công!")
+        return challenge, 200
     return "Wrong token", 403
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
     """Xử lý tin nhắn đến từ người dùng"""
     req_data = request.get_json()
+    if not req_data:
+        return "No JSON", 400
+
     for entry in req_data.get("entry", []):
         for msg_event in entry.get("messaging", []):
-            sender_id = msg_event["sender"]["id"]
+            sender_id = msg_event.get("sender", {}).get("id")
             if "message" in msg_event and "text" in msg_event["message"]:
                 text = msg_event["message"]["text"].upper().strip()
                 users = get_users()
@@ -140,10 +183,11 @@ def webhook():
                     save_role("banbe", sender_id)
                     send_msg(sender_id, "Alo bạn! Đã đăng ký nhận lời chúc tự động thành công!")
                     
-    return "OK", 200
+    return "EVENT_RECEIVED", 200
 
 # ==========================================
 # 7. KHỞI CHẠY FLASK SERVER
 # ==========================================
 if __name__ == "__main__":
-    app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 5000)))
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host='0.0.0.0', port=port)
