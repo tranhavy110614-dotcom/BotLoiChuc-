@@ -1,0 +1,6 @@
+flask
+requests
+apscheduler
+google-generativeai
+firebase-admin
+gunicorn
